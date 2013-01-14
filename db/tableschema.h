@@ -45,8 +45,12 @@ public:
 		return cpos_[c];
 	}
 
+	int GetIndexNumber() {
+		return 0;
+	}
+
 	int GetIndexPos() {
-		return cpos_[0];
+		return cpos_[GetIndexNumber()];
 	}
 	column_t GetIndexType() {
 		return ctypes_[0];

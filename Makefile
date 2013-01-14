@@ -10,7 +10,7 @@ SOURCES = db/memtable.cc db/tableschema.cc
 LIBOBJECTS = $(SOURCES:.cc=.o)
 TESTHARNESS = ./util/testharness.o 
 
-memdb_test : db/memdb_test.o $(TESTHARNESS)
+memdb_test : db/memdb_test.o $(TESTHARNESS) $(LIBOBJECTS)
 	$(CXX) $(LDFLAGS) $< $(LIBOBJECTS) $(TESTHARNESS) -o $@ $(LIBS)
 
 all: $(LIBOBJECTS) $(TESTS)

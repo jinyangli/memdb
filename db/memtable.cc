@@ -14,43 +14,8 @@
 
 namespace memdb {
 
-bool RowCompare::operator()(const char *r1, const char *r2) const {
-	int pos = s_->GetIndexPos();
-	if (s_->GetIndexType() == cInt32) {
-		if ((*(int *) r1 + pos) > (*(int *) r2 + pos)) {
-			return false;
-		} else if ((*(int *) (r1 + pos)) < (*(int *) (r2 + pos))) {
-			return true;
-		}
-	} else if (s_->GetIndexType() == cString) {
-		int result = strcmp(*(char **) (r1 + pos), *(char **) (r2 + pos));
-		if (result > 0) {
-			return false;
-		} else if (result < 0) {
-			return true;
-		}
-	} else {
-		assert(0);
-	}
-
-	if (pos == s_->GetPrimaryPos()) {
-		return true;
-	} else {
-		pos = s_->GetPrimaryPos();
-	}
-
-	if (s_->GetPrimaryType() == cInt32) {
-		if ((*(int *) (r1 + pos)) > (*(int *) (r2 + pos)))
-			return false;
-	} else if (s_->GetPrimaryType() == cString) {
-		int result = strcmp(*(char **) (r1 + pos), *(char **) (r2 + pos));
-		if (result > 0)
-			return false;
-	} else {
-		assert(0);
-	}
-
-	return true;
+bool RowCompare::operator()(char * const r1, char * const r2) const {
+	return Row::LessEqual(r1, r2, s_);
 }
 
 MemTable::MemTable(TableSchema *schema) :
@@ -60,18 +25,24 @@ MemTable::MemTable(TableSchema *schema) :
 	assert(content_);
 }
 
-void MemTable::InsertRow(Row &row) {
-	content_->insert(std::pair<char *, int>(row.TakeBuf(), 1));
+bool MemTable::InsertRow(Row &row) {
+	bool update = true;
+	auto it = content_->lower_bound(row.Buffer());
+	if (it!=content_->end() && Row::LessEqual(it->first, row.Buffer(),schema_)) {
+		if (update) {
+			Row::FreeRow(it->first, schema_);
+			content_->erase(it++);
+		}else {
+			return false;
+		}
+	}
+	content_->insert(it, std::pair<char *, int>(row.TakeBuf(), 1));
+	return true;
 }
 
 void MemTable::Clear() {
-	for (auto it = content_->begin(); it!= content_->end(); ++it) {
-		for (int i = 0; i < schema_->NumColumns(); i++) {
-			if (schema_->GetColumnType(i) == cString) {
-				free(*(char **)(it->first+schema_->GetColumnPos(i)));
-			}
-		}
-		free(it->first);
+	for (auto it = content_->begin(); it != content_->end(); ++it) {
+		Row::FreeRow(it->first, schema_);
 	}
 	content_->clear();
 }
@@ -82,28 +53,32 @@ void MemTable::PrintAll() {
 	}
 	printf("\n");
 	for (auto it = content_->begin(); it != content_->end(); ++it) {
-		for (int i = 0; i < schema_->NumColumns(); i++) {
-			if (schema_->GetColumnType(i) == cString) {
-				printf("%s\t", *(char **)(it->first+schema_->GetColumnPos(i)));
-			}else if (schema_->GetColumnType(i) == cInt32) {
-				printf("%d\t", *(int *)(it->first+schema_->GetColumnPos(i)));
-			}
-		}
-		printf("\n");
+		Row::PrintRow(it->first, schema_);
 	}
 }
 
-Row::Row(TableSchema *schema) :
-		schema_(schema), col_(0) {
-		buf_ = (char *) malloc(schema_->RowByteSize());
-		assert(buf_);
+/* --------------------------- Row ----------------------------------*/
+
+Row::Row(MemTable *table) :
+		schema_(table->GetSchema()), col_(0) {
+	buf_ = (char *) malloc(schema_->RowByteSize());
+	assert(buf_);
+	bzero(buf_, schema_->RowByteSize());
+	assert(buf_);
 }
 
-Row::Row(TableSchema *schema, char *buf) : schema_(schema), buf_(buf)  {
-	assert(buf);
-	col_ = schema_->NumColumns()-1;
+Row::~Row() {
+	if (buf_) {
+		Row::FreeRow(buf_, schema_);
+	}
+	buf_ = NULL;
 }
-
+/*
+ Row::Row(TableSchema *schema, char *buf) : schema_(schema), buf_(buf)  {
+ assert(buf);
+ col_ = schema_->NumColumns()-1;
+ }
+ */
 Row &
 operator<<(Row &r, const int & x) {
 	r.PutInt(x);
@@ -116,18 +91,147 @@ operator<<(Row &r, const std::string &s) {
 	return r;
 }
 
+void Row::PutIntAtColumn(const int &x, const int &colno) {
+	assert(schema_->GetColumnType(colno) == cInt32);
+	*((int *) (buf_ + schema_->GetColumnPos(colno))) = x;
+}
+
 void Row::PutInt(const int &x) {
-	assert(schema_->GetColumnType(col_) == cInt32);
-	*((int *) (buf_ + schema_->GetColumnPos(col_))) = x;
+	PutIntAtColumn(x, col_);
 	col_++;
 }
 
+void Row::PutStringAtColumn(const std::string &s, const int &colno) {
+	assert(schema_->GetColumnType(colno) == cString);
+	char *cs = (char *) malloc(s.length() + 1);
+	assert(cs);
+	memcpy(cs, s.c_str(), s.length() + 1);
+	*((char **) (buf_ + schema_->GetColumnPos(colno))) = cs;
+}
+
 void Row::PutString(const std::string &s) {
-	assert(schema_->GetColumnType(col_) == cString);
-	char *cs = (char *)malloc(s.length() + 1);
-	memcpy(cs, s.c_str(), s.length()+1);
-	*((char **) (buf_ + schema_->GetColumnPos(col_))) = cs;
+	PutStringAtColumn(s, col_);
 	col_++;
+}
+
+int Row::GetInt(RdOnlyRow& r, TableSchema *s, const std::string & col) {
+	int colno = s->GetColumnNumber(col);
+	assert(s->GetColumnType(colno) == cInt32);
+	return *(int *) (r + s->GetColumnPos(colno));
+}
+
+std::string Row::GetString(RdOnlyRow& r, TableSchema *s,
+		const std::string & col) {
+	int colno = s->GetColumnNumber(col);
+	assert(s->GetColumnType(colno) == cString);
+	return std::string(*(char **)(r + s->GetColumnPos(colno)));
+}
+
+bool Row::LessEqual(RdOnlyRow &r1, RdOnlyRow &r2, TableSchema *s) {
+	int pos = s->GetIndexPos();
+	if (s->GetIndexType() == cInt32) {
+		if ((*(int *) r1 + pos) > (*(int *) r2 + pos)) {
+			return false;
+		} else if ((*(int *) (r1 + pos)) < (*(int *) (r2 + pos))) {
+			return true;
+		}
+	} else if (s->GetIndexType() == cString) {
+		int result = strcmp(*(char **) (r1 + pos), *(char **) (r2 + pos));
+		if (result > 0) {
+			return false;
+		} else if (result < 0) {
+			return true;
+		}
+	} else {
+		assert(0);
+	}
+
+	if (pos == s->GetPrimaryPos()) {
+		return true;
+	} else {
+		pos = s->GetPrimaryPos();
+	}
+
+	if (s->GetPrimaryType() == cInt32) {
+		if ((*(int *) (r1 + pos)) > (*(int *) (r2 + pos)))
+			return false;
+	} else if (s->GetPrimaryType() == cString) {
+		int result = strcmp(*(char **) (r1 + pos), *(char **) (r2 + pos));
+		if (result > 0)
+			return false;
+	} else {
+		assert(0);
+	}
+	return true;
+}
+
+void Row::PrintRow(RdOnlyRow &r, TableSchema *s) {
+	for (int i = 0; i < s->NumColumns(); i++) {
+		if (s->GetColumnType(i) == cString) {
+			printf("%s\t", *(char **) (r + s->GetColumnPos(i)));
+		} else if (s->GetColumnType(i) == cInt32) {
+			printf("%d\t", *(int *) (r + s->GetColumnPos(i)));
+		}
+	}
+	printf("\n");
+}
+
+void Row::FreeRow(char *r, TableSchema *s) {
+	for (int i = 0; i < s->NumColumns(); i++) {
+		if (s->GetColumnType(i) == cString) {
+			free(*(char **) (r + s->GetColumnPos(i)));
+		}
+	}
+	free(r);
+}
+
+/*-----------------MemTable::Iterator---------------*/
+MemTable::Iterator::Iterator(MemTable* table) :
+		table_(table) {
+	iter_ = table_->content_->begin();
+}
+
+bool MemTable::Iterator::Valid() {
+	return (iter_ != table_->content_->end());
+}
+
+RdOnlyRow &
+MemTable::Iterator::RowAt() {
+	return iter_->first;
+}
+
+void MemTable::Iterator::Next() {
+	iter_++;
+}
+
+void MemTable::Iterator::Prev() {
+	iter_--;
+}
+
+RdOnlyRow &
+MemTable::Iterator::Seek(const int &key) {
+	Row r(table_);
+	r.PutIntAtColumn(key, table_->GetSchema()->GetIndexNumber());
+	return Seek(r);
+
+}
+
+RdOnlyRow&
+MemTable::Iterator::Seek(const std::string &key) {
+
+	Row r(table_);
+	r.PutStringAtColumn(key, table_->GetSchema()->GetIndexNumber());
+	return Seek(r);
+
+}
+
+RdOnlyRow&
+MemTable::Iterator::Seek(Row &r) {
+	iter_ = table_->content_->lower_bound(r.Buffer());
+}
+
+void MemTable::Iterator::SeekToFirst() {
+	iter_ = table_->content_->begin();
 }
 
 } //namespace memdb

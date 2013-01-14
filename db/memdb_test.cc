@@ -6,31 +6,32 @@
 namespace memdb {
 
 struct test_row {
-	test_row(int f, int t, std::string fn, std::string tn) : from_id(f), to_id(t), from_name(fn), to_name(tn) {}
-	test_row() {}
+	test_row(int f, int t, std::string fn, std::string tn) :
+			from_id(f), to_id(t), from_name(fn), to_name(tn) {
+	}
+	test_row() {
+	}
 	int from_id;
 	int to_id;
 	std::string from_name;
 	std::string to_name;
 };
 
-static int row_compare(const void * aptr, const void * bptr)
-{
-	const test_row *a = (test_row *)aptr;
-	const test_row *b = (test_row *)bptr;
+static int row_compare(const void * aptr, const void * bptr) {
+	const test_row *a = (test_row *) aptr;
+	const test_row *b = (test_row *) bptr;
 	if (a->from_id > b->from_id) {
 		return 1;
-	}else if (a->from_id < b->from_id) {
+	} else if (a->from_id < b->from_id) {
 		return -1;
-	}else if (a->to_id > b->to_id) {
+	} else if (a->to_id > b->to_id) {
 		return 1;
-	}else if (a->to_id < b->to_id) {
+	} else if (a->to_id < b->to_id) {
 		return -1;
-	}else{
+	} else {
 		return 0;
 	}
 }
-
 
 class MemdbTest {
 public:
@@ -49,42 +50,67 @@ TEST(MemdbTest, SortedSmall) {
 	const int N = 4;
 	test_row allrows[4];
 
-	allrows[0] = test_row(1,2,"crap","junk");
-	allrows[1] = test_row(1,3,"crap","junk");
-	allrows[2] = test_row(3,1,"crap","junk");
-	allrows[3] = test_row(2,3,"crap","junk");
+	allrows[0] = test_row(1, 2, "crap", "junk");
+	allrows[1] = test_row(1, 3, "crap", "junk");
+	allrows[2] = test_row(3, 1, "crap", "junk");
+	allrows[3] = test_row(2, 3, "crap", "junk");
 
 	qsort(allrows, N, sizeof(test_row), row_compare);
 	printf("from_id\tfrom_name\tto_id\t to_name\n");
+	table_->Clear();
 	for (int i = 0; i < N; i++) {
-		printf("%d\t%s\t%d\t%s\n", allrows[i].from_id, allrows[i].from_name.c_str(),\
-				allrows[i].to_id,allrows[i].to_name.c_str());
+		printf("%d\t%s\t%d\t%s\n", allrows[i].from_id,
+				allrows[i].from_name.c_str(), allrows[i].to_id,
+				allrows[i].to_name.c_str());
 	}
 
 	table_->Clear();
-	for (int i = N-1; i >= 0; i--) {
-		Row r(schema_);
-		r << allrows[i].from_id << allrows[i].from_name << allrows[i].to_id << allrows[i].to_name;
+	for (int i = N - 1; i >= 0; i--) {
+		Row r(table_);
+		r << allrows[i].from_id << allrows[i].from_name << allrows[i].to_id
+				<< allrows[i].to_name;
 		table_->InsertRow(r);
 	}
 	table_->PrintAll();
 }
 
-	/*
 TEST(MemdbTest, SortedBig) {
-	const int N = 10000;
+	const int N = 100000;
 	test_row allrows[N];
-	for (int i = 0; i < N; i++) {
-		allrows[i].from_id = random() % 10000;
-		allrows[i].to_id = random() % 10000;
-		allrows[i].from_name = test::RandomStr(20);
-		allrows[i].to_name = test::RandomStr(20);
+	std::map<long, int> existing;
+	int i = 0;
+	while (i < N) {
+		allrows[i] = test_row(random() % 10000, random() % 10000,
+				test::RandomStr(20), test::RandomStr(20));
+		long k = allrows[i].from_id;
+		k = k << 32 | allrows[i].to_id;
+		if (existing.find(k) == existing.end()) {
+			existing[k] = 1;
+			i++;
+		}
 	}
-	qsort();
 	table_->Clear();
-		
+	for (int i = 0; i < N; i++) {
+		Row r(table_);
+		r << allrows[i].from_id << allrows[i].from_name << allrows[i].to_id
+				<< allrows[i].to_name;
+		table_->InsertRow(r);
+	}
+	qsort(allrows, N, sizeof(test_row), row_compare);
+
+	i = 0;
+	MemTable::Iterator it = MemTable::Iterator(table_);
+	for (it.SeekToFirst(); it.Valid(); it.Next()) {
+		RdOnlyRow r = it.RowAt();
+		ASSERT_EQ(allrows[i].from_id, Row::GetInt(r, schema_, "from_id"));
+		ASSERT_EQ(allrows[i].to_id, Row::GetInt(r, schema_, "to_id"));
+		ASSERT_EQ(allrows[i].from_name,
+				Row::GetString(r, schema_, "from_name"));
+		ASSERT_EQ(allrows[i].to_name, Row::GetString(r, schema_, "to_name"));
+		i++;
+	}
+	printf("MemTable sorted %d rows correctly\n", N);
 }
-	*/
 
 TEST(MemdbTest, InsertSpeed) {
 
@@ -98,7 +124,7 @@ TEST(MemdbTest, InsertSpeed) {
 	for (int i = 0; i < N; i++) {
 		int from = random() % 1000000;
 		int to = random() % 1000000;
-		Row r(schema_);
+		Row r(table_);
 		r << from << rs1 << to << rs2;
 		table_->InsertRow(r);
 	}
