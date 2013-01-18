@@ -9,6 +9,7 @@
 #include "assert.h"
 
 #include <string>
+#include <strings.h>
 
 namespace memdb {
 
@@ -52,6 +53,22 @@ int TableSchema::GetColumnNumber(std::string name) {
 			return i;
 	}
 	return -1;
+}
+
+char *TableSchema::AllocRowBuffer() {
+	char *buf = (char *) malloc(row_byte_sz_);
+	assert(buf);
+	bzero(buf, row_byte_sz_);
+	return buf;
+}
+
+void TableSchema::FreeRowBuffer(char *buf)  {
+	for (int i = 0; i < ctypes_.size(); i++) {
+		if (ctypes_[i] == cString) {
+			free(*(char **) (buf + cpos_[i]));
+		}
+	}
+	free(buf);
 }
 
 } //namespace memdb

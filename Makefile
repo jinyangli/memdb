@@ -1,5 +1,6 @@
 CXX=g++
 CXXFLAGS += -std=c++0x -I. -g
+#CXXFLAGS += -I. -g
 LDFLAGS = 
 LIBS += -lrt
 
@@ -23,7 +24,7 @@ $(LIBRARY): $(LIBOBJECTS)
 	$(AR) -rs $@ $(LIBOBJECTS)	
 
 clean:
-	-rm -f $(PROGRAMS) $(TESTS) $(LIBRARY) */*.o
+	rm -f $(PROGRAMS) $(TESTS) $(LIBRARY) */*.o
 
 .cc.o:
 	$(CXX) $(CXXFLAGS) -c $< -o $@

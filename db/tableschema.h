@@ -8,7 +8,6 @@
 #ifndef MEMDB_DB_TABLESCHEMA_H_
 #define MEMDB_DB_TABLESCHEMA_H_
 
-#include <unordered_map>
 #include <vector>
 #include <string>
 
@@ -29,9 +28,9 @@ public:
 	int NumColumns() {
 		return ctypes_.size();
 	}
-	int RowByteSize() {
-		return row_byte_sz_;
-	}
+
+	char *AllocRowBuffer();
+	void FreeRowBuffer(char *buf);
 
 	column_t GetColumnType(int c) {
 		return ctypes_[c];
@@ -52,8 +51,13 @@ public:
 	int GetIndexPos() {
 		return cpos_[GetIndexNumber()];
 	}
+
 	column_t GetIndexType() {
 		return ctypes_[0];
+	}
+
+	int GetPrimaryNumber() {
+		return primary_;
 	}
 
 	int GetPrimaryPos() {
