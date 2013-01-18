@@ -36,6 +36,24 @@ static int row_compare(const void * aptr, const void * bptr) {
 	}
 }
 
+static int bsearch(test_row *rows, int start, int end, int from_id, int to_id) {
+	if (start == end) {
+		if ((rows[start].from_id < from_id)
+				|| ((rows[start].from_id == from_id)
+						&& (rows[start].to_id < to_id))) {
+			return start + 1;
+		} else
+			return start;
+	}
+
+	int mid = start + ((end - start) / 2);
+	if ((rows[mid].from_id < from_id)
+			|| ((rows[mid].from_id == from_id) && (rows[mid].to_id < to_id))) {
+		return bsearch(rows, mid + 1, end, from_id, to_id);
+	} else
+		return bsearch(rows, start, mid, from_id, to_id);
+}
+
 class MemdbTest {
 public:
 	MemdbTest() {
@@ -86,7 +104,7 @@ public:
 
 TEST(MemdbTest, SortedSmall) {
 	const int N = 5;
-	allrows_ = (test_row *)malloc(sizeof(test_row)*5);
+	allrows_ = (test_row *) malloc(sizeof(test_row) * 5);
 	allrows_[0] = test_row(1, 2, "alice", "bob");
 	allrows_[1] = test_row(1, 3, "alice", "eve");
 	allrows_[2] = test_row(2, 1, "bob", "alice");
@@ -105,7 +123,7 @@ TEST(MemdbTest, SortedSmall) {
 	//print sorted table
 	table_->PrintAll();
 }
-/*
+
 TEST(MemdbTest, SortedBig) {
 	const int N = 1000000;
 	InitTestRows(N);
@@ -133,53 +151,84 @@ TEST(MemdbTest, InsertSpeed) {
 	clock_gettime(CLOCK_REALTIME, &start);
 	DumpToTable(N);
 	clock_gettime(CLOCK_REALTIME, &end);
-	printf("inserting %d rows in %lu usec total\n", N,
-			test::timediff(&end, &start));
+	printf("inserting %d rows,  %lu usec per row\n", N,
+			test::timediff(&end, &start) / N);
 }
-*/
 
 TEST(MemdbTest, QuerySmall) {
 	const int N = 5;
-	allrows_ = (test_row *)malloc(sizeof(test_row)*5);
+	allrows_ = (test_row *) malloc(sizeof(test_row) * 5);
 	allrows_[0] = test_row(1, 2, "alice", "bob");
 	allrows_[1] = test_row(1, 3, "alice", "eve");
 	allrows_[2] = test_row(2, 1, "bob", "alice");
 	allrows_[3] = test_row(2, 3, "bob", "eve");
 	allrows_[4] = test_row(3, 1, "eve", "alice");
 	DumpToTable(N);
+	qsort(allrows_, N, sizeof(test_row), row_compare);
 
 	MemTable::Iterator it = MemTable::Iterator(table_);
 	RdOnlyRow r(table_);
 	it.Seek(2);
 	assert(it.Valid(2));
 	r = it.RowAt(r);
-	ASSERT_EQ(r.GetIntColumn(0), 2);
-	ASSERT_EQ(r.GetIntColumn(2), 1);
+	int ri = bsearch(allrows_, 0, N - 1, 2, 0);
+	ASSERT_EQ(r.GetIntColumn(0), allrows_[ri].from_id);
+	ASSERT_EQ(r.GetIntColumn(2), allrows_[ri].to_id);
 
 	it.Next();
 	assert(it.Valid(2));
 	r = it.RowAt(r);
-	ASSERT_EQ(r.GetIntColumn(0), 2);
-	ASSERT_EQ(r.GetIntColumn(2), 3);
+	ASSERT_EQ(r.GetIntColumn(0), allrows_[ri+1].from_id);
+	ASSERT_EQ(r.GetIntColumn(2), allrows_[ri+1].to_id);
 
 	it.Seek(1, 3);
 	r = it.RowAt(r);
 	assert(it.Valid(1, 3));
-
-	ASSERT_EQ(r.GetIntColumn(0), 1);
-	ASSERT_EQ(r.GetIntColumn(2), 3);
+	ri = bsearch(allrows_, 0, N - 1, 1, 3);
+	ASSERT_EQ(r.GetIntColumn(0), allrows_[ri].from_id);
+	ASSERT_EQ(r.GetIntColumn(2), allrows_[ri].to_id);
 	it.Next();
-	assert(!it.Valid(1,3));
+	assert(!it.Valid(1, 3));
 
 	printf("querying a small table correctly\n");
 }
 
 TEST(MemdbTest, QueryBig) {
+	const int N = 1000000;
+	InitTestRows(N);
+	DumpToTable(N);
 
-}
+	for (int i = 0; i < 5; i++) {
+		int from = allrows_[random() % N].from_id;
+		qsort(allrows_, N, sizeof(test_row), row_compare);
+		int ri = bsearch(allrows_, 0, N - 1, from, 0);
+		RdOnlyRow r(table_);
+		MemTable::Iterator it = MemTable::Iterator(table_);
+		it.Seek(from);
+		while (allrows_[ri].from_id == from) {
+			r = it.RowAt(r);
+			ASSERT_EQ(r.GetIntColumn(0), allrows_[ri].from_id);
+			ASSERT_EQ(r.GetIntColumn(2), allrows_[ri].to_id);
+			it.Next();
+			ri++;
+		}
+	}
 
-TEST(MemdbTest, QuerySpeed) {
+	const int NUM_QUERIES = 1000;
+	struct timespec start, end;
+	clock_gettime(CLOCK_REALTIME, &start);
+	for (int i = 0; i < NUM_QUERIES; i++) {
+		int x = random() % N;
+		MemTable::Iterator it = MemTable::Iterator(table_);
+		it.Seek(allrows_[x].from_id, allrows_[x].to_id);
+		RdOnlyRow r(table_);
+		r = it.RowAt(r);
+		ASSERT_EQ(r.GetIntColumn(0), allrows_[x].from_id);
+		ASSERT_EQ(r.GetIntColumn(2), allrows_[x].to_id);
 
+	}
+	clock_gettime(CLOCK_REALTIME, &end);
+	printf("%lu usec per query\n", test::timediff(&end, &start) / NUM_QUERIES);
 }
 
 } //namespace memdb
